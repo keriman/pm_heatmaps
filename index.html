@@ -6,6 +6,7 @@
     <title>Visor de Mapas de Calor</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css" />
     <style>
         html, body {
             height: 100%;
@@ -41,6 +42,23 @@
                         <span class="visually-hidden">Cargando...</span>
                     </div>
                     <input type="file" class="form-control me-3" id="fileInput" accept=".xlsx, .xls">
+                    
+                    <div id="filter-controls" class="d-flex align-items-center me-3" style="opacity: 0.5; pointer-events: none;">
+                        <div class="me-2">
+                            <label for="startDate" class="form-label">Desde</label>
+                            <input type="date" class="form-control" id="startDate">
+                        </div>
+                        <div class="me-2">
+                            <label for="endDate" class="form-label">Hasta</label>
+                            <input type="date" class="form-control" id="endDate">
+                        </div>
+                        <div class="me-2">
+                            <label for="tipoFilter" class="form-label">TIPO</label>
+                            <select class="form-select" id="tipoFilter" multiple></select>
+                        </div>
+                        <button id="filterBtn" class="btn btn-primary align-self-end">Filtrar</button>
+                    </div>
+
                     <div id="heatmap-controls" class="d-flex align-items-center" style="opacity: 0.5; pointer-events: none;">
                         <div class="me-3">
                             <label for="radius" class="form-label">Radio: <span id="radius-value">25</span></label>
@@ -62,6 +80,8 @@
     <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js"></script>
 
     <script>
         document.addEventListener('DOMContentLoaded', function () {
@@ -71,25 +91,61 @@
             }).addTo(map);
 
             let heatLayer = null;
-            let currentHeatData = [];
-
+            let allData = []; 
+            let currentHeatData = []; 
             const fileInput = document.getElementById('fileInput');
             const loader = document.getElementById('loader');
             const heatmapControls = document.getElementById('heatmap-controls');
+            const filterControls = document.getElementById('filter-controls');
             const radiusSlider = document.getElementById('radius');
             const blurSlider = document.getElementById('blur');
             const radiusValueSpan = document.getElementById('radius-value');
             const blurValueSpan = document.getElementById('blur-value');
+            const startDateInput = document.getElementById('startDate');
+            const endDateInput = document.getElementById('endDate');
+            const tipoFilterSelect = document.getElementById('tipoFilter');
+            const filterBtn = document.getElementById('filterBtn');
 
             function redrawHeatmap() {
                 if (heatLayer) map.removeLayer(heatLayer);
                 if (currentHeatData.length === 0) return;
 
-                heatLayer = L.heatLayer(currentHeatData, { 
+                const pointsToDraw = currentHeatData.map(d => d.point).filter(p => p !== null);
+
+                if(pointsToDraw.length === 0) return;
+
+                heatLayer = L.heatLayer(pointsToDraw, { 
                     radius: parseInt(radiusSlider.value, 10),
                     blur: parseInt(blurSlider.value, 10),
                     maxZoom: 18,
                 }).addTo(map);
+            }
+
+            function applyFiltersAndRedraw() {
+                const startDate = startDateInput.value ? new Date(startDateInput.value) : null;
+                const endDate = endDateInput.value ? new Date(endDateInput.value) : null;
+                const selectedTipos = Array.from(tipoFilterSelect.selectedOptions).map(opt => opt.value);
+
+                if (startDate) startDate.setHours(0, 0, 0, 0);
+                if (endDate) endDate.setHours(23, 59, 59, 999);
+
+                currentHeatData = allData.filter(d => {
+                    let dateMatch = true;
+                    if (d.fecha) {
+                        const itemDate = d.fecha;
+                        if (startDate && itemDate < startDate) dateMatch = false;
+                        if (endDate && itemDate > endDate) dateMatch = false;
+                    }
+
+                    let tipoMatch = true;
+                    if (selectedTipos.length > 0) {
+                        tipoMatch = selectedTipos.includes(d.tipo);
+                    }
+
+                    return dateMatch && tipoMatch;
+                });
+                
+                redrawHeatmap();
             }
 
             fileInput.addEventListener('change', function (e) {
@@ -102,32 +158,69 @@
                 reader.onload = function (event) {
                     try {
                         const data = event.target.result;
-                        const workbook = XLSX.read(data, { type: 'binary' });
+                        const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
                         const firstSheetName = workbook.SheetNames[0];
                         const worksheet = workbook.Sheets[firstSheetName];
                         const jsonData = XLSX.utils.sheet_to_json(worksheet);
                         
-                        currentHeatData = jsonData.map(row => {
+                        const tipos = new Set();
+                        allData = jsonData.map(row => {
                             const lat = row.latitud || row.LATITUD;
                             const lon = row.longitud || row.LONGITUD;
+                            const tipo = row.TIPO || row.tipo;
+                            const fecha = row.FECHA || row.fecha;
+
+                            if (tipo) tipos.add(tipo);
+
                             const parsedLat = parseFloat(lat);
                             const parsedLon = parseFloat(lon);
                             const intensity = parseFloat(row.intensidad || 1.0);
-
-                            if (isNaN(parsedLat) || isNaN(parsedLon)) return null;
-                            return [parsedLat, parsedLon, intensity];
-                        }).filter(p => p !== null);
+                            
+                            let point = null;
+                            if (!isNaN(parsedLat) && !isNaN(parsedLon)) {
+                                point = [parsedLat, parsedLon, intensity];
+                            }
+                            
+                            return {
+                                point: point,
+                                fecha: fecha instanceof Date ? fecha : null,
+                                tipo: tipo
+                            };
+                        }).filter(d => d.point !== null);
+                        
+                        currentHeatData = [...allData];
 
                         if (currentHeatData.length === 0) {
                             alert("No se encontraron datos de coordenadas válidos en el archivo.");
                             heatmapControls.style.opacity = '0.5';
                             heatmapControls.style.pointerEvents = 'none';
+                            filterControls.style.opacity = '0.5';
+                            filterControls.style.pointerEvents = 'none';
                             if(heatLayer) map.removeLayer(heatLayer);
                             return;
                         }
 
+                        if ($(tipoFilterSelect).data('select2')) {
+                            $(tipoFilterSelect).select2('destroy');
+                        }
+                        tipoFilterSelect.innerHTML = '';
+                        tipos.forEach(tipo => {
+                            const option = document.createElement('option');
+                            option.value = tipo;
+                            option.textContent = tipo;
+                            tipoFilterSelect.appendChild(option);
+                        });
+                        $(tipoFilterSelect).select2({
+                            placeholder: 'Seleccionar tipo(s)',
+                            width: '200px',
+                            allowClear: true
+                        });
+
                         heatmapControls.style.opacity = '1';
                         heatmapControls.style.pointerEvents = 'auto';
+                        filterControls.style.opacity = '1';
+                        filterControls.style.pointerEvents = 'auto';
+                        
                         redrawHeatmap();
                         map.setView([19.702879635698825, -101.19232863317521], 12);
 
@@ -157,8 +250,9 @@
                 blurValueSpan.textContent = this.value;
                 redrawHeatmap();
             });
+
+            filterBtn.addEventListener('click', applyFiltersAndRedraw);
         });
     </script>
-
 </body>
 </html>
