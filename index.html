@@ -15,13 +15,38 @@
             flex-direction: column;
         }
         #map {
-            flex-grow: 1; 
+            flex-grow: 1;
         }
         #heatmap-controls {
             transition: opacity 0.3s ease-in-out;
         }
         .form-label {
             margin-bottom: 0;
+        }
+        .legend {
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            line-height: 24px;
+            font-size: 14px;
+        }
+        .legend h4 {
+            margin: 0 0 8px 0;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .legend-item {
+            margin: 4px 0;
+        }
+        .legend-color {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            margin-right: 8px;
+            border: 2px solid #333;
+            vertical-align: middle;
+            border-radius: 3px;
         }
     </style>
 </head>
@@ -69,6 +94,21 @@
                             <input type="range" class="form-range" id="blur" min="1" max="30" value="15">
                         </div>
                     </div>
+
+                    <div class="d-flex align-items-center ms-3">
+                        <div class="form-check me-3">
+                            <input class="form-check-input" type="checkbox" id="toggleCuadrantes" checked>
+                            <label class="form-check-label" for="toggleCuadrantes">
+                                Cuadrantes
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="toggleSectores" checked>
+                            <label class="form-check-label" for="toggleSectores">
+                                Sectores
+                            </label>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -78,17 +118,158 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+    <script src="https://unpkg.com/leaflet-omnivore@0.3.4/leaflet-omnivore.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js"></script>
+    <script src="cuadrantes.min.js"></script>
+    <script src="sectores.min.js"></script>
 
     <script>
+        (function() {
+            const devtools = { open: false };
+            const element = new Image();
+
+            Object.defineProperty(element, 'id', {
+                get: function() {
+                    devtools.open = true;
+                }
+            });
+
+            setInterval(function() {
+                console.clear();
+            }, 1000);
+
+            document.addEventListener('contextmenu', e => e.preventDefault());
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'F12' ||
+                    (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) ||
+                    (e.ctrlKey && (e.key === 'u' || e.key === 'U' || e.key === 's' || e.key === 'S'))) {
+                    e.preventDefault();
+                    return false;
+                }
+            });
+
+            let devtoolsOpen = false;
+            const threshold = 160;
+
+            setInterval(function() {
+                const widthThreshold = window.outerWidth - window.innerWidth > threshold;
+                const heightThreshold = window.outerHeight - window.innerHeight > threshold;
+
+                if (widthThreshold || heightThreshold) {
+                    if (!devtoolsOpen) {
+                        devtoolsOpen = true;
+                    }
+                } else {
+                    devtoolsOpen = false;
+                }
+            }, 500);
+
+            if (typeof cuadrantesKML !== 'undefined' && typeof sectoresKML !== 'undefined') {
+                Object.defineProperty(window, 'cuadrantesKML', {
+                    get: function() { return undefined; },
+                    set: function() {}
+                });
+                Object.defineProperty(window, 'sectoresKML', {
+                    get: function() { return undefined; },
+                    set: function() {}
+                });
+            }
+        })();
+
         document.addEventListener('DOMContentLoaded', function () {
             const map = L.map('map').setView([20.5, -100.3], 5);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             }).addTo(map);
+
+            const coloresSectores = {
+                'Centro': '#FF1493',              
+                'Independencia': '#00BFFF',        
+                'Independencia Sur': '#32CD32',    
+                'Nueva España': '#FFD700',        
+                'República': '#FF4500',            
+                'República Poniente': '#9370DB',   
+                'Revolución': '#00CED1'           
+            };
+
+            const cuadrantesLayer = L.layerGroup().addTo(map);
+            const cuadrantesBlob = new Blob([cuadrantesKML], { type: 'application/vnd.google-earth.kml+xml' });
+            const cuadrantesURL = URL.createObjectURL(cuadrantesBlob);
+            const customLayerCuadrantes = L.geoJson(null, {
+                style: function(feature) {
+                    return {
+                        color: '#000000',      
+                        weight: 2,
+                        opacity: 0.8,
+                        fillOpacity: 0,        
+                        fillColor: 'transparent'
+                    };
+                },
+                onEachFeature: function(feature, layer) {
+                    const nombre = feature.properties.nombre || 'Sin nombre';
+                    const sector = feature.properties.nom_sec || '';
+                    layer.bindPopup(`<b>Cuadrante: ${nombre}</b><br>Sector: ${sector}`);
+                }
+            });
+
+            const cuadrantesKMLLayer = omnivore.kml(cuadrantesURL, null, customLayerCuadrantes);
+            cuadrantesKMLLayer.on('ready', function() {
+                this.addTo(cuadrantesLayer);
+                URL.revokeObjectURL(cuadrantesURL); 
+            });
+
+            const sectoresLayer = L.layerGroup().addTo(map);
+            const sectoresBlob = new Blob([sectoresKML], { type: 'application/vnd.google-earth.kml+xml' });
+            const sectoresURL = URL.createObjectURL(sectoresBlob);
+            const customLayerSectores = L.geoJson(null, {
+                style: function(feature) {
+                    const nombre = feature.properties.nombre || 'Sin nombre';
+                    const color = coloresSectores[nombre] || '#808080';
+                    return {
+                        color: color,
+                        weight: 4,
+                        opacity: 1,
+                        fillOpacity: 0.35,
+                        fillColor: color
+                    };
+                },
+                onEachFeature: function(feature, layer) {
+                    const nombre = feature.properties.nombre || 'Sin nombre';
+                    const responsable = feature.properties.responsable || '';
+                    const color = coloresSectores[nombre] || '#808080';
+                    layer.bindPopup(`<b>Sector: ${nombre}</b><br>Responsable: ${responsable}<br><span style="color:${color}">●</span> Color identificador`);
+                }
+            });
+
+            const sectoresKMLLayer = omnivore.kml(sectoresURL, null, customLayerSectores);
+
+            sectoresKMLLayer.on('ready', function() {
+                this.addTo(sectoresLayer);
+                URL.revokeObjectURL(sectoresURL); 
+            });
+
+            const legend = L.control({ position: 'bottomright' });
+            legend.onAdd = function(map) {
+                const div = L.DomUtil.create('div', 'legend');
+                div.innerHTML = '<h4>Sectores</h4>';
+
+                for (const [nombre, color] of Object.entries(coloresSectores)) {
+                    div.innerHTML += `
+                        <div class="legend-item">
+                            <span class="legend-color" style="background-color: ${color}"></span>
+                            <span>${nombre}</span>
+                        </div>
+                    `;
+                }
+
+                div.innerHTML += '<hr style="margin: 8px 0;"><div class="legend-item"><span class="legend-color" style="background-color: #000000; border-color: #000000;"></span><span>Cuadrantes (delineado)</span></div>';
+
+                return div;
+            };
+            legend.addTo(map);
 
             let heatLayer = null;
             let allData = []; 
@@ -220,9 +401,10 @@
                         heatmapControls.style.pointerEvents = 'auto';
                         filterControls.style.opacity = '1';
                         filterControls.style.pointerEvents = 'auto';
-                        
+                        fileInput.style.display = 'none';
+
                         redrawHeatmap();
-                        map.setView([19.702879635698825, -101.19232863317521], 12);
+                        map.setView([19.702879635698825, -101.19232863317521], 11);
 
                     } catch (error) {
                         console.error("Error al procesar el archivo:", error);
@@ -252,6 +434,22 @@
             });
 
             filterBtn.addEventListener('click', applyFiltersAndRedraw);
+
+            document.getElementById('toggleCuadrantes').addEventListener('change', function(e) {
+                if (e.target.checked) {
+                    map.addLayer(cuadrantesLayer);
+                } else {
+                    map.removeLayer(cuadrantesLayer);
+                }
+            });
+
+            document.getElementById('toggleSectores').addEventListener('change', function(e) {
+                if (e.target.checked) {
+                    map.addLayer(sectoresLayer);
+                } else {
+                    map.removeLayer(sectoresLayer);
+                }
+            });
         });
     </script>
 </body>
