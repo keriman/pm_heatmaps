@@ -86,11 +86,14 @@
                     </div>
 
                     <div id="heatmap-controls" class="d-flex align-items-center me-3" style="opacity: 0.5; pointer-events: none;">
-                        <div class="me-3">
+                        <button id="toggleViewMode" class="btn btn-secondary me-3">
+                            Modo: <span id="view-mode-text">Calor</span>
+                        </button>
+                        <div class="me-3" id="radius-control">
                             <label for="radius" class="form-label">Radio: <span id="radius-value">25</span></label>
                             <input type="range" class="form-range" id="radius" min="1" max="50" value="25">
                         </div>
-                        <div>
+                        <div id="blur-control">
                             <label for="blur" class="form-label">Desenfoque: <span id="blur-value">15</span></label>
                             <input type="range" class="form-range" id="blur" min="1" max="30" value="15">
                         </div>
@@ -277,8 +280,10 @@
             legend.addTo(map);
 
             let heatLayer = null;
-            let allData = []; 
-            let currentHeatData = []; 
+            let markersLayer = L.layerGroup();
+            let isHeatMode = true;
+            let allData = [];
+            let currentHeatData = [];
             const fileInput = document.getElementById('fileInput');
             const loader = document.getElementById('loader');
             const heatmapControls = document.getElementById('heatmap-controls');
@@ -294,17 +299,33 @@
 
             function redrawHeatmap() {
                 if (heatLayer) map.removeLayer(heatLayer);
+                markersLayer.clearLayers();
+
                 if (currentHeatData.length === 0) return;
 
                 const pointsToDraw = currentHeatData.map(d => d.point).filter(p => p !== null);
-
                 if(pointsToDraw.length === 0) return;
 
-                heatLayer = L.heatLayer(pointsToDraw, { 
-                    radius: parseInt(radiusSlider.value, 10),
-                    blur: parseInt(blurSlider.value, 10),
-                    maxZoom: 18,
-                }).addTo(map);
+                if (isHeatMode) {
+                        heatLayer = L.heatLayer(pointsToDraw, {
+                        radius: parseInt(radiusSlider.value, 10),
+                        blur: parseInt(blurSlider.value, 10),
+                        maxZoom: 18,
+                    }).addTo(map);
+                } else {
+                    pointsToDraw.forEach(point => {
+                        const marker = L.circleMarker([point[0], point[1]], {
+                            radius: 6,
+                            fillColor: '#ff4444',
+                            color: '#cc0000',
+                            weight: 1,
+                            opacity: 1,
+                            fillOpacity: 0.8
+                        });
+                        marker.addTo(markersLayer);
+                    });
+                    markersLayer.addTo(map);
+                }
             }
 
             function applyFiltersAndRedraw() {
@@ -472,6 +493,27 @@
                         });
                     }
                 });
+            });
+
+            const toggleViewModeBtn = document.getElementById('toggleViewMode');
+            const viewModeText = document.getElementById('view-mode-text');
+            const radiusControl = document.getElementById('radius-control');
+            const blurControl = document.getElementById('blur-control');
+
+            toggleViewModeBtn.addEventListener('click', function() {
+                isHeatMode = !isHeatMode;
+
+                if (isHeatMode) {
+                    viewModeText.textContent = 'Calor';
+                    radiusControl.style.display = 'block';
+                    blurControl.style.display = 'block';
+                } else {
+                    viewModeText.textContent = 'Marcadores';
+                    radiusControl.style.display = 'none';
+                    blurControl.style.display = 'none';
+                }
+
+                redrawHeatmap();
             });
         });
     </script>
